@@ -170,6 +170,17 @@ export class DriftPanelView extends ItemView {
 				text: `Missing stubs (${missingStubs.length})`,
 			});
 
+			// "Create all" button
+			const createAllBtn = summary.createEl("button", {
+				cls: "jd-drift-fix-all",
+				attr: { title: "Create all missing stubs" },
+			});
+			setIcon(createAllBtn, "plus-circle");
+			createAllBtn.addEventListener("click", async (e) => {
+				e.stopPropagation();
+				await this.createAllStubs(missingStubs);
+			});
+
 			const list = section.createEl("ul", { cls: "jd-drift-list" });
 			for (const stub of missingStubs) {
 				this.renderMissingStub(list, stub);
@@ -252,6 +263,18 @@ export class DriftPanelView extends ItemView {
 			text: stub.expectedPath,
 			cls: "jd-drift-detail",
 		});
+
+		// Create button
+		const actions = li.createDiv({ cls: "jd-drift-actions" });
+		const createBtn = actions.createEl("button", {
+			cls: "jd-drift-action-btn",
+			attr: { title: "Create stub note" },
+		});
+		setIcon(createBtn, "file-plus");
+		createBtn.addEventListener("click", async (e) => {
+			e.stopPropagation();
+			await this.createSingleStub(stub);
+		});
 	}
 
 	// ── Auto-fix actions ─────────────────────────────────────────
@@ -299,5 +322,92 @@ export class DriftPanelView extends ItemView {
 		}
 		// No frontmatter — add it
 		return `---\njd-id: '${id}'\n---\n${content}`;
+	}
+
+	// ── Stub creation ────────────────────────────────────────────
+
+	/** Standard zeros that are directories (get folder + README) vs notes */
+	private static DIR_ZEROS = new Set(["01", "03", "06", "09"]);
+
+	private isDirectoryZero(id: string): boolean {
+		const parts = id.split(".");
+		if (parts.length !== 2) return false;
+		return DriftPanelView.DIR_ZEROS.has(parts[1]);
+	}
+
+	private today(): string {
+		return new Date().toISOString().split("T")[0];
+	}
+
+	private buildStubContent(id: string, title: string, isDir: boolean): string {
+		if (isDir) {
+			// +README inside a directory
+			return [
+				"---",
+				`jd-id: '${id}+README'`,
+				`jd-title: ${title}`,
+				"aliases:",
+				`    - ${id} ${title}`,
+				"---",
+				"",
+				`# ${title}`,
+				"",
+			].join("\n");
+		}
+		// Regular note stub
+		return [
+			"---",
+			`jd-id: '${id}'`,
+			`jd-title: ${title}`,
+			"jd-type: id",
+			`created: ${this.today()}`,
+			"---",
+			"",
+			`# ${id} ${title}`,
+			"",
+			"## Contents",
+			"",
+		].join("\n");
+	}
+
+	private async createSingleStub(stub: MissingStub): Promise<void> {
+		const isDir = this.isDirectoryZero(stub.id);
+
+		if (isDir) {
+			// Create directory and +README inside it
+			const folderPath = stub.expectedPath.replace(/\.md$/, "");
+			const readmePath = `${folderPath}/${stub.id}+README.md`;
+
+			// Ensure parent dirs exist
+			try {
+				await this.app.vault.createFolder(folderPath);
+			} catch {
+				// Folder may already exist
+			}
+
+			const content = this.buildStubContent(stub.id, stub.title, true);
+			await this.app.vault.create(readmePath, content);
+		} else {
+			// Create note file
+			const content = this.buildStubContent(stub.id, stub.title, false);
+			await this.app.vault.create(stub.expectedPath, content);
+		}
+
+		new Notice(`Created stub: ${stub.id} ${stub.title}`);
+		this.debouncedRender();
+	}
+
+	private async createAllStubs(stubs: MissingStub[]): Promise<void> {
+		let created = 0;
+		for (const stub of stubs) {
+			try {
+				await this.createSingleStub(stub);
+				created++;
+			} catch {
+				// Skip if already exists or path issues
+			}
+		}
+		new Notice(`Created ${created} stub notes`);
+		this.debouncedRender();
 	}
 }
