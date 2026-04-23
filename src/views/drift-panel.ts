@@ -363,7 +363,7 @@ export class DriftPanelView extends ItemView {
 			`created: ${this.today()}`,
 			"---",
 			"",
-			`# ${id} ${title}`,
+			`# ${title}`,
 			"",
 			"## Contents",
 			"",
