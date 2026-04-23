@@ -1,0 +1,174 @@
+/**
+ * Johnny Decimal Dashboard — Obsidian plugin entry point.
+ *
+ * Provides live JD system awareness: inbox dashboard, drift detection,
+ * quick ID navigation. Reads the same jd-index.yaml and jd.yaml that
+ * jd-cli uses, with no runtime dependency on the Python tool.
+ */
+
+import { Notice, Plugin, type WorkspaceLeaf } from "obsidian";
+import { type JDSettings, DEFAULT_SETTINGS, JDSettingsTab } from "./settings";
+import { InboxDashboardView, VIEW_TYPE_INBOX } from "./views/inbox-dashboard";
+import { DriftPanelView, VIEW_TYPE_DRIFT } from "./views/drift-panel";
+import { GoToIdModal } from "./commands/go-to-id";
+import { generateDriftReport } from "./commands/drift-report";
+import { scanDrift } from "./scanner";
+import { parseJDex, type JDex } from "./jdex";
+import { readFileSync } from "fs";
+
+export default class JDDashboardPlugin extends Plugin {
+	settings: JDSettings = DEFAULT_SETTINGS;
+	jdex: JDex | null = null;
+
+	async onload(): Promise<void> {
+		await this.loadSettings();
+		this.loadJDex();
+
+		// Register views
+		this.registerView(
+			VIEW_TYPE_INBOX,
+			(leaf) => new InboxDashboardView(leaf, this)
+		);
+		this.registerView(
+			VIEW_TYPE_DRIFT,
+			(leaf) => new DriftPanelView(leaf, this)
+		);
+
+		// Ribbon icons
+		this.addRibbonIcon("inbox", "JD Inboxes", () => {
+			this.activateInboxView();
+		});
+		this.addRibbonIcon("alert-triangle", "JD Drift", () => {
+			this.activateDriftView();
+		});
+
+		// Commands
+		this.addCommand({
+			id: "open-inbox-dashboard",
+			name: "Open inbox dashboard",
+			callback: () => this.activateInboxView(),
+		});
+
+		this.addCommand({
+			id: "go-to-id",
+			name: "Go to ID",
+			callback: () => new GoToIdModal(this.app).open(),
+		});
+
+		this.addCommand({
+			id: "open-drift-panel",
+			name: "Open drift panel",
+			callback: () => this.activateDriftView(),
+		});
+
+		this.addCommand({
+			id: "check-drift",
+			name: "Check for drift",
+			callback: () => this.checkDrift(),
+		});
+
+		this.addCommand({
+			id: "drift-report",
+			name: "Generate drift report",
+			callback: () => generateDriftReport(this.app, this.jdex),
+		});
+
+		// Settings tab
+		this.addSettingTab(new JDSettingsTab(this.app, this));
+
+		// Status bar — drift count (clickable)
+		const statusEl = this.addStatusBarItem();
+		statusEl.addClass("jd-status-drift");
+		statusEl.addEventListener("click", () => this.activateDriftView());
+		this.registerEvent(
+			this.app.metadataCache.on("resolved", () => {
+				this.updateStatusBar(statusEl);
+			})
+		);
+		// Initial update after a short delay to let metadata cache populate
+		this.app.workspace.onLayoutReady(() => {
+			setTimeout(() => this.updateStatusBar(statusEl), 2000);
+		});
+	}
+
+	async onunload(): Promise<void> {
+		// Views are automatically deregistered
+	}
+
+	async loadSettings(): Promise<void> {
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			await this.loadData()
+		);
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+	}
+
+	private loadJDex(): void {
+		try {
+			const jdexPath = this.settings.jdexPath.replace("~", process.env.HOME ?? "");
+			const raw = readFileSync(jdexPath, "utf-8");
+			this.jdex = parseJDex(raw);
+		} catch {
+			this.jdex = null;
+		}
+	}
+
+	async activateInboxView(): Promise<void> {
+		const { workspace } = this.app;
+
+		let leaf = workspace.getLeavesOfType(VIEW_TYPE_INBOX)[0];
+
+		if (!leaf) {
+			const rightLeaf = workspace.getRightLeaf(false);
+			if (!rightLeaf) return;
+			leaf = rightLeaf;
+			await leaf.setViewState({ type: VIEW_TYPE_INBOX, active: true });
+		}
+
+		workspace.revealLeaf(leaf);
+	}
+
+	async activateDriftView(): Promise<void> {
+		const { workspace } = this.app;
+
+		let leaf = workspace.getLeavesOfType(VIEW_TYPE_DRIFT)[0];
+
+		if (!leaf) {
+			const rightLeaf = workspace.getRightLeaf(false);
+			if (!rightLeaf) return;
+			leaf = rightLeaf;
+			await leaf.setViewState({ type: VIEW_TYPE_DRIFT, active: true });
+		}
+
+		workspace.revealLeaf(leaf);
+	}
+
+	private updateStatusBar(el: HTMLElement): void {
+		const drift = scanDrift(this.app);
+		if (drift.length > 0) {
+			el.setText(`JD: ${drift.length} drifted`);
+			el.title = drift.map((d) => d.detail).join("\n");
+		} else {
+			el.setText("");
+			el.title = "";
+		}
+	}
+
+	private checkDrift(): void {
+		const drift = scanDrift(this.app);
+		if (drift.length === 0) {
+			new Notice("No drift detected — all JD notes are consistent.");
+			return;
+		}
+		new Notice(`Found ${drift.length} drifted notes. Check the console for details.`);
+		console.group("JD Drift Report");
+		for (const item of drift) {
+			console.log(`[${item.issue}] ${item.path}: ${item.detail}`);
+		}
+		console.groupEnd();
+	}
+}
