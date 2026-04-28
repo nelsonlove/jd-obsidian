@@ -12,12 +12,18 @@ export interface JDSettings {
 	jdexPath: string;
 	/** Show inbox items with count 0 */
 	showEmptyInboxes: boolean;
+	/** Days before a surveyed date is considered stale */
+	staleDays: number;
+	/** Run vault audit on Obsidian startup */
+	auditOnStartup: boolean;
 }
 
 export const DEFAULT_SETTINGS: JDSettings = {
 	jdRoot: "~/Documents",
 	jdexPath: "~/.local/share/jd/jd-index.yaml",
 	showEmptyInboxes: false,
+	staleDays: 90,
+	auditOnStartup: false,
 };
 
 export class JDSettingsTab extends PluginSettingTab {
@@ -70,6 +76,34 @@ export class JDSettingsTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.showEmptyInboxes)
 					.onChange(async (value) => {
 						this.plugin.settings.showEmptyInboxes = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl).setName("Audit").setHeading();
+
+		new Setting(containerEl)
+			.setName("Stale surveyed threshold")
+			.setDesc("Days before a surveyed date is flagged as stale")
+			.addSlider((slider) =>
+				slider
+					.setLimits(30, 365, 30)
+					.setValue(this.plugin.settings.staleDays)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.staleDays = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Audit on startup")
+			.setDesc("Run vault audit automatically when Obsidian opens")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.auditOnStartup)
+					.onChange(async (value) => {
+						this.plugin.settings.auditOnStartup = value;
 						await this.plugin.saveSettings();
 					})
 			);

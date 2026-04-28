@@ -12,6 +12,7 @@ import { InboxDashboardView, VIEW_TYPE_INBOX } from "./views/inbox-dashboard";
 import { DriftPanelView, VIEW_TYPE_DRIFT } from "./views/drift-panel";
 import { GoToIdModal } from "./commands/go-to-id";
 import { generateDriftReport } from "./commands/drift-report";
+import { generateAuditReport } from "./commands/audit-report";
 import { scanDrift } from "./scanner";
 import { parseJDex, type JDex } from "./jdex";
 import { FrontmatterNormalizer } from "./normalizer";
@@ -76,6 +77,15 @@ export default class JDDashboardPlugin extends Plugin {
 			callback: () => generateDriftReport(this.app, this.jdex),
 		});
 
+		this.addCommand({
+			id: "vault-audit",
+			name: "Run vault audit",
+			callback: () =>
+				generateAuditReport(this.app, this.jdex, {
+					staleDays: this.settings.staleDays,
+				}),
+		});
+
 		// Settings tab
 		this.addSettingTab(new JDSettingsTab(this.app, this));
 
@@ -92,6 +102,17 @@ export default class JDDashboardPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			setTimeout(() => this.updateStatusBar(statusEl), 2000);
 		});
+
+		// Optional audit on startup
+		if (this.settings.auditOnStartup) {
+			this.app.workspace.onLayoutReady(() => {
+				setTimeout(() => {
+					generateAuditReport(this.app, this.jdex, {
+						staleDays: this.settings.staleDays,
+					});
+				}, 5000); // wait for metadata cache to settle
+			});
+		}
 
 		// Frontmatter normalizer — auto-fix on save
 		this.registerEvent(
