@@ -6,7 +6,7 @@
  * jd-cli uses, with no runtime dependency on the Python tool.
  */
 
-import { Notice, Plugin, type WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, TFile, type WorkspaceLeaf } from "obsidian";
 import { type JDSettings, DEFAULT_SETTINGS, JDSettingsTab } from "./settings";
 import { InboxDashboardView, VIEW_TYPE_INBOX } from "./views/inbox-dashboard";
 import { DriftPanelView, VIEW_TYPE_DRIFT } from "./views/drift-panel";
@@ -14,15 +14,18 @@ import { GoToIdModal } from "./commands/go-to-id";
 import { generateDriftReport } from "./commands/drift-report";
 import { scanDrift } from "./scanner";
 import { parseJDex, type JDex } from "./jdex";
+import { FrontmatterNormalizer } from "./normalizer";
 import { readFileSync } from "fs";
 
 export default class JDDashboardPlugin extends Plugin {
 	settings: JDSettings = DEFAULT_SETTINGS;
 	jdex: JDex | null = null;
+	private normalizer!: FrontmatterNormalizer;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.loadJDex();
+		this.normalizer = new FrontmatterNormalizer(this.app);
 
 		// Register views
 		this.registerView(
@@ -89,6 +92,16 @@ export default class JDDashboardPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			setTimeout(() => this.updateStatusBar(statusEl), 2000);
 		});
+
+		// Frontmatter normalizer — auto-fix on save
+		this.registerEvent(
+			this.app.vault.on("modify", (file) => {
+				if (!(file instanceof TFile)) return;
+				if (!file.path.endsWith(".md")) return;
+				if (this.normalizer.isGuarded(file.path)) return;
+				this.normalizer.normalize(file);
+			})
+		);
 	}
 
 	async onunload(): Promise<void> {
