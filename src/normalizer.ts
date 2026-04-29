@@ -53,16 +53,30 @@ const SUBID_TYPES: Record<string, string> = {
 	"+AUDIT": "audit",
 };
 
-export function inferType(jdId: string): string | null {
+/**
+ * True when the head of an ID is 5 digits (an expanded-area item or its
+ * sub-ID — e.g. `92004` or `92004.11`).
+ */
+function isExpandedFormat(jdId: string): boolean {
+	const head = jdId.includes(".") ? jdId.slice(0, jdId.indexOf(".")) : jdId;
+	return /^\d{5}$/.test(head);
+}
+
+export function inferType(
+	jdId: string,
+	options: { inferForExpanded?: boolean } = {}
+): string | null {
 	for (const [suffix, type] of Object.entries(SUBID_TYPES)) {
 		if (jdId.toUpperCase().includes(suffix)) return type;
 	}
 	if (jdId.includes("+")) return "meta";
+
+	// Expanded-area items cover disparate kinds; defer to user unless opted in.
+	if (isExpandedFormat(jdId) && !options.inferForExpanded) return null;
+
 	const parts = jdId.split(".");
 	if (parts.length === 2) return ZERO_TYPES[parts[1]] ?? "id";
-	// 5-digit expanded-area IDs (e.g. 92001 projects, 27001 people) cover
-	// disparate content kinds across areas — we don't try to infer a type.
-	// User adds tags manually as appropriate.
+	if (parts.length === 1 && /^\d{5}$/.test(jdId)) return "id";
 	return null;
 }
 
@@ -223,7 +237,9 @@ export class FrontmatterNormalizer {
 			const idVal = (valMatch ? valMatch[1] : "")
 				.replace(/['"]/g, "")
 				.trim();
-			const inferred = inferType(idVal);
+			const inferred = inferType(idVal, {
+				inferForExpanded: this.settings.inferTypeForExpandedIds,
+			});
 
 			if (inferred && shouldWriteType(this.settings, inferred)) {
 				if (this.settings.typeAsTag) {

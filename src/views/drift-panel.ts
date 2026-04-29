@@ -349,7 +349,10 @@ export class DriftPanelView extends ItemView {
 		// Standard zeros (01/03/06/09) get a meaningful inferred type
 		// (inbox/templates/knowledge-base/archive). Other IDs fall through
 		// to the generic "id", which may be omitted by settings.
-		const inferred = inferType(id) ?? "id";
+		const inferred =
+			inferType(id, {
+				inferForExpanded: settings.inferTypeForExpandedIds,
+			}) ?? "id";
 		const typeLines = formatTypeFrontmatter(settings, inferred);
 
 		const lines = [

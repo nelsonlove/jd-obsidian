@@ -53,6 +53,15 @@ export interface JDSettings {
 	// ── Generic-id behavior ──────────────────────────────────────
 	/** Whether to persist type when the inferred value is the generic `id` */
 	writeTypeForGenericIds: boolean;
+
+	// ── Expanded-area inference ──────────────────────────────────
+	/**
+	 * When true, the normalizer infers types for 5-digit expanded-area IDs
+	 * (e.g. 92001, 27001) and their sub-IDs (92001.11). Default off because
+	 * 5-digit IDs cover disparate kinds across areas (projects in 90-99,
+	 * people in 27, etc.) — the user manages tags directly.
+	 */
+	inferTypeForExpandedIds: boolean;
 }
 
 export const DEFAULT_SETTINGS: JDSettings = {
@@ -79,6 +88,8 @@ export const DEFAULT_SETTINGS: JDSettings = {
 	typeTagMap: {},
 
 	writeTypeForGenericIds: true,
+
+	inferTypeForExpandedIds: false,
 };
 
 // ── Tag-map serialization ────────────────────────────────────────
@@ -384,6 +395,20 @@ export class JDSettingsTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.writeTypeForGenericIds)
 					.onChange(async (value) => {
 						this.plugin.settings.writeTypeForGenericIds = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Infer type for expanded-area IDs")
+			.setDesc(
+				"On: 5-digit IDs (e.g. 92001 projects, 27001 people) and their sub-IDs (92001.11) get auto-inferred types. Off (default): user manages tags manually for these — they cover disparate kinds across areas."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.inferTypeForExpandedIds)
+					.onChange(async (value) => {
+						this.plugin.settings.inferTypeForExpandedIds = value;
 						await this.plugin.saveSettings();
 					})
 			);
