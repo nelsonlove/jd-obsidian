@@ -44,6 +44,9 @@ function checkLabels(idKey: string): Record<string, string> {
 		"stale-surveyed": "Stale surveyed dates",
 		"title-mismatch": "Title mismatches",
 		"missing-stub": "Missing note stubs",
+		"unregistered-id": "Unregistered IDs (in vault, not in JDex YAML)",
+		"jdex-title-mismatch": "Filename ↔ JDex YAML title mismatches",
+		"jdex-category-mismatch": "Category folder ↔ JDex YAML title mismatches",
 	};
 }
 

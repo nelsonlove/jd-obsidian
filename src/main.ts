@@ -17,7 +17,7 @@ import { migrateReadmeFiles } from "./commands/migrate-readme";
 import { renderCategoryJdex } from "./commands/render-jdex";
 import { promoteToFolder } from "./commands/promote-to-folder";
 import { scanDrift } from "./scanner";
-import { parseJDex, type JDex } from "./jdex";
+import { parseJDex, parseJDConfig, type JDex, type JDConfig } from "./jdex";
 import { FrontmatterNormalizer } from "./normalizer";
 import { getKeys } from "./keys";
 import { readFileSync } from "fs";
@@ -25,11 +25,13 @@ import { readFileSync } from "fs";
 export default class JDDashboardPlugin extends Plugin {
 	settings: JDSettings = DEFAULT_SETTINGS;
 	jdex: JDex | null = null;
+	jdConfig: JDConfig | null = null;
 	private normalizer!: FrontmatterNormalizer;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.loadJDex();
+		this.loadJDConfig();
 		this.normalizer = new FrontmatterNormalizer(this.app, this.settings);
 
 		// Register views
@@ -87,6 +89,7 @@ export default class JDDashboardPlugin extends Plugin {
 			callback: () =>
 				generateAuditReport(this.app, this.jdex, this.settings, {
 					staleDays: this.settings.staleDays,
+					jdConfig: this.jdConfig,
 				}),
 		});
 
@@ -144,6 +147,7 @@ export default class JDDashboardPlugin extends Plugin {
 				setTimeout(() => {
 					generateAuditReport(this.app, this.jdex, this.settings, {
 						staleDays: this.settings.staleDays,
+						jdConfig: this.jdConfig,
 					});
 				}, 5000); // wait for metadata cache to settle
 			});
@@ -184,6 +188,16 @@ export default class JDDashboardPlugin extends Plugin {
 			this.jdex = parseJDex(raw);
 		} catch {
 			this.jdex = null;
+		}
+	}
+
+	private loadJDConfig(): void {
+		try {
+			const path = this.settings.jdConfigPath.replace("~", process.env.HOME ?? "");
+			const raw = readFileSync(path, "utf-8");
+			this.jdConfig = parseJDConfig(raw);
+		} catch {
+			this.jdConfig = null;
 		}
 	}
 

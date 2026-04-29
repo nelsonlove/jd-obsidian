@@ -97,6 +97,47 @@ export function findArea(jdex: JDex, areaId: string): JDArea | undefined {
 	return jdex.areas.find((a) => a.id === areaId);
 }
 
+// ── Expanded area helpers ────────────────────────────────────────
+
+/**
+ * True when an area is declared as expanded in jd.yaml — i.e. it uses
+ * non-standard numbering (e.g. 5-digit project IDs in 90-99).
+ */
+export function isExpandedArea(
+	config: JDConfig | null,
+	areaId: string
+): boolean {
+	if (!config?.expanded_areas) return false;
+	return Object.prototype.hasOwnProperty.call(config.expanded_areas, areaId);
+}
+
+/**
+ * True when an ID is a legitimate expanded-area item per jd.yaml.
+ *
+ *   "92001" → true  (if 90-99 is expanded with sequential-5digit scheme)
+ *   "06.13" → false (not expanded)
+ *   "92.01" → false (standard zero, not an expanded item)
+ */
+export function isExpandedAreaItem(
+	config: JDConfig | null,
+	id: string
+): boolean {
+	if (!config?.expanded_areas) return false;
+	if (!/^\d{5}$/.test(id)) return false;
+
+	const numeric = Number.parseInt(id, 10);
+	if (Number.isNaN(numeric)) return false;
+
+	for (const def of Object.values(config.expanded_areas)) {
+		if (def.scheme !== "sequential-5digit") continue;
+		const [lo, hi] = def.range ?? [];
+		if (typeof lo === "number" && typeof hi === "number") {
+			if (numeric >= lo && numeric <= hi) return true;
+		}
+	}
+	return false;
+}
+
 /** Build a flat list of all entries with their area/category context. */
 export interface FlatEntry {
 	entry: JDEntry;

@@ -11,6 +11,8 @@ export interface JDSettings {
 	jdRoot: string;
 	/** Absolute path to jd-index.yaml */
 	jdexPath: string;
+	/** Absolute path to jd.yaml (config — expanded areas, etc.) */
+	jdConfigPath: string;
 
 	// ── Dashboard ────────────────────────────────────────────────
 	/** Show inbox items with count 0 */
@@ -56,6 +58,7 @@ export interface JDSettings {
 export const DEFAULT_SETTINGS: JDSettings = {
 	jdRoot: "~/Documents",
 	jdexPath: "~/.local/share/jd/jd-index.yaml",
+	jdConfigPath: "~/.config/jd/jd.yaml",
 	showEmptyInboxes: false,
 	staleDays: 90,
 	auditOnStartup: false,
@@ -137,6 +140,19 @@ export class JDSettingsTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.jdexPath)
 					.onChange(async (value) => {
 						this.plugin.settings.jdexPath = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("JD config path")
+			.setDesc("Path to jd.yaml — declares expanded areas and other config")
+			.addText((text) =>
+				text
+					.setPlaceholder("~/.config/jd/jd.yaml")
+					.setValue(this.plugin.settings.jdConfigPath)
+					.onChange(async (value) => {
+						this.plugin.settings.jdConfigPath = value;
 						await this.plugin.saveSettings();
 					})
 			);

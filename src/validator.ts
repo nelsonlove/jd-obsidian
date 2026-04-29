@@ -7,8 +7,8 @@
  */
 
 import { type App, TFile, TFolder } from "obsidian";
-import type { JDex } from "./jdex";
-import { flatEntries } from "./jdex";
+import type { JDex, JDConfig } from "./jdex";
+import { flatEntries, findCategory, isExpandedAreaItem } from "./jdex";
 import type { JDKeys } from "./keys";
 import { categoryOf } from "./keys";
 import { isIgnored, clearIgnoreCache } from "./ignores";
@@ -351,12 +351,101 @@ function checkMissingStubs(app: App, jdex: JDex): ValidationIssue[] {
 	return issues;
 }
 
+// ── JDex YAML drift (vault → YAML) ────────────────────────────────
+
+function checkUnregisteredIds(
+	app: App,
+	keys: JDKeys,
+	jdex: JDex,
+	config: JDConfig | null
+): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+	const knownIds = new Set(flatEntries(jdex).map((f) => f.entry.id));
+
+	for (const file of app.vault.getMarkdownFiles()) {
+		const match = file.basename.match(ID_RE);
+		if (!match) continue;
+		const id = match[1];
+
+		if (id.includes(".") && id.endsWith(".00")) continue;
+		if (knownIds.has(id)) continue;
+		if (isExpandedAreaItem(config, id)) continue;
+
+		issues.push({
+			check: "unregistered-id",
+			severity: "warning",
+			path: file.path,
+			message: `ID ${id} not present in JDex YAML`,
+			suggestion: `Add via 'jd jdex adopt' or remove the note`,
+		});
+	}
+
+	return issues;
+}
+
+function checkJdexTitleMismatch(app: App, jdex: JDex): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+	const titleById = new Map(
+		flatEntries(jdex).map((f) => [f.entry.id, f.entry.title])
+	);
+
+	for (const file of app.vault.getMarkdownFiles()) {
+		const match = file.basename.match(ID_RE);
+		if (!match) continue;
+		const id = match[1];
+		const filenameTitle = match[2];
+		const yamlTitle = titleById.get(id);
+		if (!yamlTitle) continue;
+		if (yamlTitle === filenameTitle) continue;
+
+		issues.push({
+			check: "jdex-title-mismatch",
+			severity: "warning",
+			path: file.path,
+			message: `Filename title "${filenameTitle}" differs from JDex YAML "${yamlTitle}"`,
+			suggestion: `Rename the file or update jd-index.yaml`,
+		});
+	}
+
+	return issues;
+}
+
+function checkJdexCategoryMismatch(app: App, jdex: JDex): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+
+	const root = app.vault.getRoot();
+	for (const areaChild of root.children) {
+		if (!(areaChild instanceof TFolder)) continue;
+		if (!AREA_RE.test(areaChild.name)) continue;
+		for (const catChild of areaChild.children) {
+			if (!(catChild instanceof TFolder)) continue;
+			const m = catChild.name.match(CATEGORY_RE);
+			if (!m) continue;
+			const catNum = m[1];
+			const folderTitle = m[2];
+			const yamlCat = findCategory(jdex, catNum);
+			if (!yamlCat) continue;
+			if (yamlCat.title === folderTitle) continue;
+			issues.push({
+				check: "jdex-category-mismatch",
+				severity: "info",
+				path: catChild.path,
+				message: `Category folder "${folderTitle}" differs from JDex YAML "${yamlCat.title}"`,
+				suggestion: `Rename the folder or update jd-index.yaml`,
+			});
+		}
+	}
+
+	return issues;
+}
+
 // ── Engine ───────────────────────────────────────────────────────
 
 export interface ValidatorOptions {
 	staleDays?: number;
 	skipChecks?: string[];
 	keys: JDKeys;
+	jdConfig?: JDConfig | null;
 }
 
 export function runValidation(
@@ -364,7 +453,7 @@ export function runValidation(
 	jdex: JDex | null,
 	options: ValidatorOptions
 ): ValidationReport {
-	const { staleDays = 90, skipChecks = [], keys } = options;
+	const { staleDays = 90, skipChecks = [], keys, jdConfig = null } = options;
 	const skip = new Set(skipChecks);
 
 	clearIgnoreCache();
@@ -384,6 +473,15 @@ export function runValidation(
 
 	if (jdex) {
 		checks.push(["missing-stub", () => checkMissingStubs(app, jdex)]);
+		checks.push([
+			"unregistered-id",
+			() => checkUnregisteredIds(app, keys, jdex, jdConfig),
+		]);
+		checks.push(["jdex-title-mismatch", () => checkJdexTitleMismatch(app, jdex)]);
+		checks.push([
+			"jdex-category-mismatch",
+			() => checkJdexCategoryMismatch(app, jdex),
+		]);
 	}
 
 	for (const [name, fn] of checks) {
