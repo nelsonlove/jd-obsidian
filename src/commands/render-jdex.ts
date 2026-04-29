@@ -25,6 +25,10 @@ import { getKeys, formatTypeFrontmatter } from "../keys";
 const CATEGORY_JDEX_RE = /^(\d{2})\.00 JDex for category \1\.md$/;
 const CATEGORY_FOLDER_RE = /^(\d{2})\s+(.+)$/;
 const FIVE_DIGIT_ITEM_RE = /^(\d{5})\s+(.+)$/;
+const ID_BASENAME_RE = /^(\d{2}\.\d{2}|\d{5})\s+(.+)$/;
+
+/** Frontmatter key that supplies the entry description (preferred over YAML). */
+const DESCRIPTION_KEY = "description";
 
 const SENTINEL_START = "<!-- jd:render-start -->";
 const SENTINEL_END = "<!-- jd:render-end -->";
@@ -58,6 +62,8 @@ export async function renderCategoryJdex(
 		driftedRefs: [],
 	};
 
+	const idToFile = buildIdFileMap(app);
+
 	// Pass 1: ensure every JDex-YAML category has a JDex note. Create missing.
 	for (const area of jdex.areas) {
 		for (const cat of area.categories) {
@@ -80,7 +86,7 @@ export async function renderCategoryJdex(
 				// Folder may already exist
 			}
 
-			const entries = collectEntries(app, jdex, cat.id);
+			const entries = collectEntries(app, jdex, cat.id, idToFile);
 			const content = buildNewJdexNote(settings, cat.id, cat.title, entries);
 			try {
 				await app.vault.create(expectedPath, content);
@@ -103,7 +109,7 @@ export async function renderCategoryJdex(
 		if (!m) continue;
 		const catNum = m[1];
 
-		const entries = collectEntries(app, jdex, catNum);
+		const entries = collectEntries(app, jdex, catNum, idToFile);
 		if (entries.length === 0) {
 			result.skipped.push({
 				path: file.path,
@@ -187,6 +193,50 @@ function buildNewJdexNote(
 
 // ── Discovery ────────────────────────────────────────────────────
 
+/**
+ * Map JD ID → the most-canonical note file in the vault. When multiple
+ * files match (rare), prefer a cover note (basename === parent folder name)
+ * over a leaf note.
+ */
+function buildIdFileMap(app: App): Map<string, TFile> {
+	const out = new Map<string, TFile>();
+	for (const file of app.vault.getMarkdownFiles()) {
+		const m = file.basename.match(ID_BASENAME_RE);
+		if (!m) continue;
+		const id = m[1];
+		const existing = out.get(id);
+		if (!existing) {
+			out.set(id, file);
+			continue;
+		}
+		const isCoverNew = file.parent?.name === file.basename;
+		const isCoverExisting = existing.parent?.name === existing.basename;
+		if (isCoverNew && !isCoverExisting) out.set(id, file);
+	}
+	return out;
+}
+
+/**
+ * Pull a description for `id` — prefer the note's frontmatter, fall back
+ * to the JDex YAML entry.
+ */
+function descriptionFor(
+	app: App,
+	id: string,
+	idToFile: Map<string, TFile>,
+	yamlDescription: string | undefined
+): string | undefined {
+	const file = idToFile.get(id);
+	if (file) {
+		const fm = app.metadataCache.getFileCache(file)?.frontmatter;
+		const fromFm = fm?.[DESCRIPTION_KEY];
+		if (fromFm !== undefined && fromFm !== null && String(fromFm).trim()) {
+			return String(fromFm).trim();
+		}
+	}
+	return yamlDescription;
+}
+
 function findCategoryJdexFiles(app: App): TFile[] {
 	const out: TFile[] = [];
 	for (const file of app.vault.getMarkdownFiles()) {
@@ -199,7 +249,8 @@ function findCategoryJdexFiles(app: App): TFile[] {
 function collectEntries(
 	app: App,
 	jdex: JDex,
-	catNum: string
+	catNum: string,
+	idToFile: Map<string, TFile>
 ): RenderEntry[] {
 	const seen = new Set<string>();
 	const out: RenderEntry[] = [];
@@ -209,7 +260,11 @@ function collectEntries(
 		for (const e of cat.entries) {
 			if (seen.has(e.id)) continue;
 			seen.add(e.id);
-			out.push({ id: e.id, title: e.title, description: e.description });
+			out.push({
+				id: e.id,
+				title: e.title,
+				description: descriptionFor(app, e.id, idToFile, e.description),
+			});
 		}
 	}
 
@@ -224,7 +279,11 @@ function collectEntries(
 			if (!id.startsWith(catNum)) continue;
 			if (seen.has(id)) continue;
 			seen.add(id);
-			out.push({ id, title: m[2] });
+			out.push({
+				id,
+				title: m[2],
+				description: descriptionFor(app, id, idToFile, undefined),
+			});
 		}
 	}
 
