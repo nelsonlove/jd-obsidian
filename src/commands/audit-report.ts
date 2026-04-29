@@ -14,6 +14,8 @@ import {
 	type ValidatorOptions,
 } from "../validator";
 import type { JDex } from "../jdex";
+import type { JDSettings } from "../settings";
+import { getKeys, formatTypeFrontmatter } from "../keys";
 
 const REPORT_PATH =
 	"00-09 System/00 System management/00.00+REPORT JD vault audit.md";
@@ -30,19 +32,20 @@ const SEVERITY_LABEL: Record<Severity, string> = {
 	info: "Info",
 };
 
-const CHECK_LABELS: Record<string, string> = {
-	"required-fields": "Missing required fields",
-	"date-format": "Invalid date formats",
-	"valid-category": "Invalid JD categories",
-	"duplicate-id": "Duplicate jd-id values",
-	"orphaned-file": "Orphaned files",
-	"broken-wikilink": "Broken wikilinks",
-	"empty-note": "Empty notes",
-	"stale-surveyed": "Stale surveyed dates",
-	"missing-alias": "Missing +README aliases",
-	"title-mismatch": "Title mismatches",
-	"missing-stub": "Missing note stubs",
-};
+function checkLabels(idKey: string): Record<string, string> {
+	return {
+		"required-fields": "Missing required fields",
+		"date-format": "Invalid date formats",
+		"valid-category": "Invalid JD categories",
+		"duplicate-id": `Duplicate ${idKey} values`,
+		"orphaned-file": "Orphaned files",
+		"broken-wikilink": "Broken wikilinks",
+		"empty-note": "Empty notes",
+		"stale-surveyed": "Stale surveyed dates",
+		"title-mismatch": "Title mismatches",
+		"missing-stub": "Missing note stubs",
+	};
+}
 
 function formatDate(): string {
 	return new Date().toISOString().split("T")[0];
@@ -78,14 +81,19 @@ function renderIssue(issue: ValidationIssue): string {
 export async function generateAuditReport(
 	app: App,
 	jdex: JDex | null,
-	options?: ValidatorOptions
+	settings: JDSettings,
+	options?: Omit<ValidatorOptions, "keys">
 ): Promise<void> {
-	const report = runValidation(app, jdex, options);
+	const keys = getKeys(settings);
+	const report = runValidation(app, jdex, { ...options, keys });
 	const lines: string[] = [];
+	const CHECK_LABELS = checkLabels(keys.id);
 
 	// Frontmatter
 	lines.push("---");
-	lines.push("jd-type: report");
+	for (const line of formatTypeFrontmatter(settings, "report")) {
+		lines.push(line);
+	}
 	lines.push(`generated: ${formatDate()}`);
 	lines.push("---");
 	lines.push("");

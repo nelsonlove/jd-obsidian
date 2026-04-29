@@ -9,6 +9,8 @@
 import { type App, TFile, TFolder } from "obsidian";
 import type { JDex } from "./jdex";
 import { flatEntries } from "./jdex";
+import type { JDKeys } from "./keys";
+import { isIgnored, clearIgnoreCache } from "./ignores";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -32,21 +34,19 @@ export interface ValidationReport {
 // ── Patterns ─────────────────────────────────────────────────────
 
 const ID_RE = /^(\d{2}\.\d{2})\s+(.+)$/;
-const README_RE = /^(\d{2}\.\d{2})\+README$/;
 const AREA_RE = /^(\d{2})-(\d{2})\s+(.+)$/;
 const CATEGORY_RE = /^(\d{2})\s+(.+)$/;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
 
 // ── Individual checks ────────────────────────────────────────────
 
-function checkRequiredFields(app: App): ValidationIssue[] {
+function checkRequiredFields(app: App, keys: JDKeys): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
-	const required = ["jd-id", "jd-title", "jd-type"];
+	const required = [keys.id, keys.title, keys.type];
 
 	for (const file of app.vault.getMarkdownFiles()) {
 		const match = ID_RE.exec(file.basename);
-		const isReadme = README_RE.test(file.basename);
-		if (!match && !isReadme) continue;
+		if (!match) continue;
 
 		const cache = app.metadataCache.getFileCache(file);
 		const fm = cache?.frontmatter;
@@ -96,7 +96,7 @@ function checkDateFormats(app: App): ValidationIssue[] {
 	return issues;
 }
 
-function checkValidCategories(app: App): ValidationIssue[] {
+function checkValidCategories(app: App, keys: JDKeys): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 
 	const knownCategories = new Set<string>();
@@ -114,16 +114,16 @@ function checkValidCategories(app: App): ValidationIssue[] {
 	for (const file of app.vault.getMarkdownFiles()) {
 		const cache = app.metadataCache.getFileCache(file);
 		const fm = cache?.frontmatter;
-		if (!fm?.["jd-id"]) continue;
+		if (!fm?.[keys.id]) continue;
 
-		const jdId = String(fm["jd-id"]).replace(/\+.*$/, "");
+		const jdId = String(fm[keys.id]).replace(/\+.*$/, "");
 		const catNum = jdId.split(".")[0];
 		if (catNum && !knownCategories.has(catNum)) {
 			issues.push({
 				check: "valid-category",
 				severity: "error",
 				path: file.path,
-				message: `jd-id ${fm["jd-id"]} references unknown category ${catNum}`,
+				message: `${keys.id} ${fm[keys.id]} references unknown category ${catNum}`,
 				suggestion: `Verify category ${catNum} exists in the vault`,
 			});
 		}
@@ -132,16 +132,16 @@ function checkValidCategories(app: App): ValidationIssue[] {
 	return issues;
 }
 
-function checkDuplicateIds(app: App): ValidationIssue[] {
+function checkDuplicateIds(app: App, keys: JDKeys): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 	const seen = new Map<string, string[]>();
 
 	for (const file of app.vault.getMarkdownFiles()) {
 		const cache = app.metadataCache.getFileCache(file);
 		const fm = cache?.frontmatter;
-		if (!fm?.["jd-id"]) continue;
+		if (!fm?.[keys.id]) continue;
 
-		const id = String(fm["jd-id"]);
+		const id = String(fm[keys.id]);
 		const list = seen.get(id) ?? [];
 		list.push(file.path);
 		seen.set(id, list);
@@ -154,7 +154,7 @@ function checkDuplicateIds(app: App): ValidationIssue[] {
 					check: "duplicate-id",
 					severity: "error",
 					path,
-					message: `Duplicate jd-id '${id}' (${paths.length} notes)`,
+					message: `Duplicate ${keys.id} '${id}' (${paths.length} notes)`,
 					suggestion: `Other files: ${paths.filter((p) => p !== path).join(", ")}`,
 				});
 			}
@@ -164,7 +164,7 @@ function checkDuplicateIds(app: App): ValidationIssue[] {
 	return issues;
 }
 
-function checkOrphanedFiles(app: App): ValidationIssue[] {
+function checkOrphanedFiles(app: App, keys: JDKeys): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 
 	const linkedPaths = new Set<string>();
@@ -192,12 +192,11 @@ function checkOrphanedFiles(app: App): ValidationIssue[] {
 
 	for (const file of app.vault.getMarkdownFiles()) {
 		const match = ID_RE.exec(file.basename);
-		const isReadme = README_RE.test(file.basename);
-		if (!match && !isReadme) continue;
+		if (!match) continue;
 
 		const cache = app.metadataCache.getFileCache(file);
 		const fm = cache?.frontmatter;
-		if (fm?.["jd-type"] === "index") continue;
+		if (fm?.[keys.type] === "index") continue;
 
 		if (!linkedPaths.has(file.path)) {
 			issues.push({
@@ -245,8 +244,7 @@ function checkEmptyNotes(app: App): ValidationIssue[] {
 
 	for (const file of app.vault.getMarkdownFiles()) {
 		const match = ID_RE.exec(file.basename);
-		const isReadme = README_RE.test(file.basename);
-		if (!match && !isReadme) continue;
+		if (!match) continue;
 
 		const cache = app.metadataCache.getFileCache(file);
 		if (!cache) continue;
@@ -301,37 +299,7 @@ function checkStaleSurveyed(app: App, staleDays: number): ValidationIssue[] {
 	return issues;
 }
 
-function checkMissingAliases(app: App): ValidationIssue[] {
-	const issues: ValidationIssue[] = [];
-
-	for (const file of app.vault.getMarkdownFiles()) {
-		if (!README_RE.test(file.basename)) continue;
-
-		const cache = app.metadataCache.getFileCache(file);
-		const fm = cache?.frontmatter;
-		if (!fm) continue;
-
-		const aliases: string[] = fm.aliases ?? [];
-		const idBase = file.basename.replace("+README", "");
-		const title = fm["jd-title"] ?? "";
-		const expectedAlias = `${idBase} ${title}`;
-
-		const hasAlias = aliases.some((a: string) => a.startsWith(idBase));
-		if (!hasAlias) {
-			issues.push({
-				check: "missing-alias",
-				severity: "warning",
-				path: file.path,
-				message: `+README missing alias for base ID`,
-				suggestion: `Add alias: "${expectedAlias}"`,
-			});
-		}
-	}
-
-	return issues;
-}
-
-function checkTitleMismatch(app: App): ValidationIssue[] {
+function checkTitleMismatch(app: App, keys: JDKeys): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 
 	for (const file of app.vault.getMarkdownFiles()) {
@@ -341,16 +309,16 @@ function checkTitleMismatch(app: App): ValidationIssue[] {
 		const filenameTitle = match[2];
 		const cache = app.metadataCache.getFileCache(file);
 		const fm = cache?.frontmatter;
-		if (!fm?.["jd-title"]) continue;
+		if (!fm?.[keys.title]) continue;
 
-		const fmTitle = String(fm["jd-title"]);
+		const fmTitle = String(fm[keys.title]);
 		if (fmTitle !== filenameTitle) {
 			issues.push({
 				check: "title-mismatch",
 				severity: "warning",
 				path: file.path,
-				message: `jd-title "${fmTitle}" doesn't match filename "${filenameTitle}"`,
-				suggestion: `Update jd-title or rename the file`,
+				message: `${keys.title} "${fmTitle}" doesn't match filename "${filenameTitle}"`,
+				suggestion: `Update ${keys.title} or rename the file`,
 			});
 		}
 	}
@@ -366,8 +334,6 @@ function checkMissingStubs(app: App, jdex: JDex): ValidationIssue[] {
 	for (const file of app.vault.getMarkdownFiles()) {
 		const match = ID_RE.exec(file.basename);
 		if (match) existingIds.add(match[1]);
-		const rmMatch = README_RE.exec(file.basename);
-		if (rmMatch) existingIds.add(rmMatch[1]);
 	}
 
 	for (const { entry, category, area } of allEntries) {
@@ -389,29 +355,30 @@ function checkMissingStubs(app: App, jdex: JDex): ValidationIssue[] {
 export interface ValidatorOptions {
 	staleDays?: number;
 	skipChecks?: string[];
+	keys: JDKeys;
 }
 
 export function runValidation(
 	app: App,
 	jdex: JDex | null,
-	options: ValidatorOptions = {}
+	options: ValidatorOptions
 ): ValidationReport {
-	const { staleDays = 90, skipChecks = [] } = options;
+	const { staleDays = 90, skipChecks = [], keys } = options;
 	const skip = new Set(skipChecks);
 
+	clearIgnoreCache();
 	const allIssues: ValidationIssue[] = [];
 
 	const checks: [string, () => ValidationIssue[]][] = [
-		["required-fields", () => checkRequiredFields(app)],
+		["required-fields", () => checkRequiredFields(app, keys)],
 		["date-format", () => checkDateFormats(app)],
-		["valid-category", () => checkValidCategories(app)],
-		["duplicate-id", () => checkDuplicateIds(app)],
-		["orphaned-file", () => checkOrphanedFiles(app)],
+		["valid-category", () => checkValidCategories(app, keys)],
+		["duplicate-id", () => checkDuplicateIds(app, keys)],
+		["orphaned-file", () => checkOrphanedFiles(app, keys)],
 		["broken-wikilink", () => checkBrokenWikilinks(app)],
 		["empty-note", () => checkEmptyNotes(app)],
 		["stale-surveyed", () => checkStaleSurveyed(app, staleDays)],
-		["missing-alias", () => checkMissingAliases(app)],
-		["title-mismatch", () => checkTitleMismatch(app)],
+		["title-mismatch", () => checkTitleMismatch(app, keys)],
 	];
 
 	if (jdex) {
@@ -420,7 +387,14 @@ export function runValidation(
 
 	for (const [name, fn] of checks) {
 		if (skip.has(name)) continue;
-		allIssues.push(...fn());
+		const raw = fn();
+		// Filter out issues whose file opts out via the ignore frontmatter
+		const filtered = raw.filter((issue) => {
+			const file = app.vault.getAbstractFileByPath(issue.path);
+			if (!(file instanceof TFile)) return true;
+			return !isIgnored(app, file, keys, issue.check);
+		});
+		allIssues.push(...filtered);
 	}
 
 	const severityOrder: Record<Severity, number> = {

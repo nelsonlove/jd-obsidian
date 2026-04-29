@@ -9,6 +9,8 @@
 import { ItemView, type WorkspaceLeaf, TFile, setIcon, Notice } from "obsidian";
 import type JDDashboardPlugin from "../main";
 import { scanDrift, findMissingStubs, type DriftItem, type MissingStub } from "../scanner";
+import { getKeys, formatTypeFrontmatter } from "../keys";
+import { inferType } from "../normalizer";
 
 export const VIEW_TYPE_DRIFT = "jd-drift-panel";
 
@@ -79,7 +81,7 @@ export class DriftPanelView extends ItemView {
 		container.empty();
 		container.addClass("jd-drift-panel");
 
-		const drift = scanDrift(this.app);
+		const drift = scanDrift(this.app, getKeys(this.plugin.settings));
 		const missingStubs = this.plugin.jdex
 			? findMissingStubs(this.app, this.plugin.jdex)
 			: [];
@@ -140,7 +142,7 @@ export class DriftPanelView extends ItemView {
 			if (issue === "missing-frontmatter") {
 				const fixAllBtn = summary.createEl("button", {
 					cls: "jd-drift-fix-all",
-					attr: { title: "Add jd-id frontmatter to all" },
+					attr: { title: `Add ${getKeys(this.plugin.settings).id} frontmatter to all` },
 				});
 				setIcon(fixAllBtn, "wrench");
 				fixAllBtn.addEventListener("click", async (e) => {
@@ -237,7 +239,7 @@ export class DriftPanelView extends ItemView {
 		if (item.issue === "missing-frontmatter" && item.filenameId) {
 			const fixBtn = actions.createEl("button", {
 				cls: "jd-drift-action-btn",
-				attr: { title: "Add jd-id to frontmatter" },
+				attr: { title: `Add ${getKeys(this.plugin.settings).id} to frontmatter` },
 			});
 			setIcon(fixBtn, "wrench");
 			fixBtn.addEventListener("click", async (e) => {
@@ -289,7 +291,7 @@ export class DriftPanelView extends ItemView {
 			return this.addFrontmatterId(content, item.filenameId!);
 		});
 
-		new Notice(`Added jd-id: '${item.filenameId}' to ${file.basename}`);
+		new Notice(`Added ${getKeys(this.plugin.settings).id}: '${item.filenameId}' to ${file.basename}`);
 		this.debouncedRender();
 	}
 
@@ -305,23 +307,24 @@ export class DriftPanelView extends ItemView {
 			});
 			fixed++;
 		}
-		new Notice(`Added jd-id frontmatter to ${fixed} notes`);
+		new Notice(`Added ${getKeys(this.plugin.settings).id} frontmatter to ${fixed} notes`);
 		this.debouncedRender();
 	}
 
 	private addFrontmatterId(content: string, id: string): string {
+		const idKey = getKeys(this.plugin.settings).id;
 		if (content.startsWith("---\n")) {
-			// Has frontmatter — insert jd-id after opening ---
+			// Has frontmatter — insert ID line after opening ---
 			const endIdx = content.indexOf("\n---\n", 4);
 			if (endIdx !== -1) {
 				const before = content.slice(0, 4);
 				const fm = content.slice(4, endIdx);
 				const after = content.slice(endIdx);
-				return `${before}jd-id: '${id}'\n${fm}${after}`;
+				return `${before}${idKey}: '${id}'\n${fm}${after}`;
 			}
 		}
 		// No frontmatter — add it
-		return `---\njd-id: '${id}'\n---\n${content}`;
+		return `---\n${idKey}: '${id}'\n---\n${content}`;
 	}
 
 	// ── Stub creation ────────────────────────────────────────────
@@ -340,45 +343,40 @@ export class DriftPanelView extends ItemView {
 	}
 
 	private buildStubContent(id: string, title: string, isDir: boolean): string {
-		if (isDir) {
-			// +README inside a directory
-			return [
-				"---",
-				`jd-id: '${id}+README'`,
-				`jd-title: ${title}`,
-				"aliases:",
-				`    - ${id} ${title}`,
-				"---",
-				"",
-				`# ${title}`,
-				"",
-			].join("\n");
-		}
-		// Regular note stub
-		return [
+		const settings = this.plugin.settings;
+		const keys = getKeys(settings);
+
+		// Standard zeros (01/03/06/09) get a meaningful inferred type
+		// (inbox/templates/knowledge-base/archive). Other IDs fall through
+		// to the generic "id", which may be omitted by settings.
+		const inferred = inferType(id) ?? "id";
+		const typeLines = formatTypeFrontmatter(settings, inferred);
+
+		const lines = [
 			"---",
-			`jd-id: '${id}'`,
-			`jd-title: ${title}`,
-			"jd-type: id",
+			`${keys.id}: '${id}'`,
+			`${keys.title}: ${title}`,
+			...typeLines,
 			`created: ${this.today()}`,
 			"---",
 			"",
 			`# ${title}`,
 			"",
-			"## Contents",
-			"",
-		].join("\n");
+		];
+		if (!isDir) lines.push("## Contents", "");
+		return lines.join("\n");
 	}
 
 	private async createSingleStub(stub: MissingStub): Promise<void> {
 		const isDir = this.isDirectoryZero(stub.id);
 
 		if (isDir) {
-			// Create directory and +README inside it
+			// Create directory with a folder-named cover note inside.
+			// Convention: `06.12 Foo/06.12 Foo.md`.
 			const folderPath = stub.expectedPath.replace(/\.md$/, "");
-			const readmePath = `${folderPath}/${stub.id}+README.md`;
+			const folderName = folderPath.split("/").pop() ?? "";
+			const coverPath = `${folderPath}/${folderName}.md`;
 
-			// Ensure parent dirs exist
 			try {
 				await this.app.vault.createFolder(folderPath);
 			} catch {
@@ -386,7 +384,7 @@ export class DriftPanelView extends ItemView {
 			}
 
 			const content = this.buildStubContent(stub.id, stub.title, true);
-			await this.app.vault.create(readmePath, content);
+			await this.app.vault.create(coverPath, content);
 		} else {
 			// Create note file
 			const content = this.buildStubContent(stub.id, stub.title, false);

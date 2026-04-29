@@ -1,34 +1,38 @@
 /**
  * Frontmatter normalizer — auto-corrects JD note frontmatter on save.
  *
- * Runs on vault "modify" events for JD notes. Applies:
- *   1. Key ordering: jd-title, jd-id, jd-type, jd-location, created,
- *      modified, surveyed, aliases, tags, then rest alphabetically
- *   2. jd-id quoting: ensures value is quoted (YAML treats 06.12 as number)
- *   3. jd-type inference: sets type from ID pattern if missing
- *   4. H1 heading cleanup: strips "# XX.YY Title" to "# Title"
+ * Runs on vault "modify" events for JD notes. Each behavior is independently
+ * toggleable in settings; the key names (titleKey/idKey/typeKey) come from
+ * settings via getKeys().
+ *
+ * Behaviors (gated by toggles):
+ *   - normalizeQuoteId: wrap unquoted IDs in single quotes
+ *   - normalizeInferType: add inferred type when missing (writes a tag
+ *       instead when typeAsTag is on; skipped when value is `id` and
+ *       writeTypeForGenericIds is off)
+ *   - normalizeSortKeys: reorder frontmatter keys into canonical order
+ *   - normalizeStripHeadingId: rewrite `# XX.YY Title` as `# Title`
  *
  * Uses a write guard to prevent re-triggering from its own modifications.
  */
 
 import { type App, TFile } from "obsidian";
+import type { JDSettings } from "./settings";
+import { getKeys, shouldWriteType, typeTagFor } from "./keys";
 
-// ── Key order ────────────────────────────────────────────────────
-
-const KEY_ORDER: Record<string, number> = {
-	"jd-title": 0,
-	"jd-id": 1,
-	"jd-type": 2,
-	"jd-location": 3,
-	"created": 4,
-	"modified": 5,
-	"surveyed": 6,
-	"aliases": 7,
-	"tags": 8,
-};
-
-function sortKey(key: string): [number, string] {
-	return [KEY_ORDER[key] ?? 100, key];
+function buildKeyOrder(settings: JDSettings): Record<string, number> {
+	const k = getKeys(settings);
+	return {
+		[k.title]: 0,
+		[k.id]: 1,
+		[k.type]: 2,
+		"jd-location": 3,
+		created: 4,
+		modified: 5,
+		surveyed: 6,
+		aliases: 7,
+		tags: 8,
+	};
 }
 
 // ── Type inference ───────────────────────────────────────────────
@@ -49,15 +53,9 @@ const SUBID_TYPES: Record<string, string> = {
 	"+AUDIT": "audit",
 };
 
-function inferType(jdId: string): string | null {
+export function inferType(jdId: string): string | null {
 	for (const [suffix, type] of Object.entries(SUBID_TYPES)) {
 		if (jdId.toUpperCase().includes(suffix)) return type;
-	}
-	if (jdId.includes("+README")) {
-		const base = jdId.split("+")[0];
-		const parts = base.split(".");
-		if (parts.length === 2) return ZERO_TYPES[parts[1]] ?? null;
-		return null;
 	}
 	if (jdId.includes("+")) return "meta";
 	const parts = jdId.split(".");
@@ -107,13 +105,60 @@ function parseFrontmatter(fmText: string): FmEntry[] {
 	return entries;
 }
 
-function sortEntries(entries: FmEntry[]): FmEntry[] {
+function sortEntries(
+	entries: FmEntry[],
+	order: Record<string, number>
+): FmEntry[] {
 	return [...entries].sort((a, b) => {
-		const [aOrd, aKey] = sortKey(a.key);
-		const [bOrd, bKey] = sortKey(b.key);
+		const aOrd = order[a.key] ?? 100;
+		const bOrd = order[b.key] ?? 100;
 		if (aOrd !== bOrd) return aOrd - bOrd;
-		return aKey.localeCompare(bKey);
+		return a.key.localeCompare(b.key);
 	});
+}
+
+// ── Tag handling ────────────────────────────────────────────────
+
+/**
+ * Insert a tag into an existing `tags:` entry, or create one. Mutates the
+ * entries array. Returns true if a change was made, false if the tag was
+ * already present.
+ */
+function ensureTag(entries: FmEntry[], tag: string): boolean {
+	const tagsEntry = entries.find((e) => e.key === "tags");
+	if (!tagsEntry) {
+		entries.push({ key: "tags", text: `tags:\n    - ${tag}` });
+		return true;
+	}
+
+	const lines = tagsEntry.text.split("\n");
+	for (const line of lines) {
+		const m = line.match(/^\s*-\s*(.+?)\s*$/);
+		if (m && m[1] === tag) return false;
+	}
+
+	const inlineList = tagsEntry.text.match(/^tags:\s*\[(.*)\]\s*$/);
+	if (inlineList) {
+		const existing = inlineList[1]
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean);
+		if (existing.includes(tag)) return false;
+		const all = [...existing, tag];
+		tagsEntry.text = `tags:\n${all.map((t) => `    - ${t}`).join("\n")}`;
+		return true;
+	}
+
+	const inlineSingle = tagsEntry.text.match(/^tags:\s*([^\s\[].+?)\s*$/);
+	if (inlineSingle) {
+		const existing = inlineSingle[1].trim();
+		if (existing === tag) return false;
+		tagsEntry.text = `tags:\n    - ${existing}\n    - ${tag}`;
+		return true;
+	}
+
+	tagsEntry.text = `${tagsEntry.text}\n    - ${tag}`;
+	return true;
 }
 
 // ── Normalizer ──────────────────────────────────────────────────
@@ -123,10 +168,17 @@ const HEADING_ID_RE = /^# \d{2}\.\d{2}\+?\s+(.+)$/m;
 
 export class FrontmatterNormalizer {
 	private app: App;
+	private settings: JDSettings;
 	private writeGuard = new Set<string>();
 
-	constructor(app: App) {
+	constructor(app: App, settings: JDSettings) {
 		this.app = app;
+		this.settings = settings;
+	}
+
+	/** Refresh the cached settings reference (call after settings change). */
+	updateSettings(settings: JDSettings): void {
+		this.settings = settings;
 	}
 
 	isGuarded(path: string): boolean {
@@ -134,9 +186,10 @@ export class FrontmatterNormalizer {
 	}
 
 	async normalize(file: TFile): Promise<boolean> {
+		if (!this.settings.normalizeEnabled) return false;
+
 		const match = ID_RE.exec(file.basename);
-		const isReadme = /^\d{2}\.\d{2}\+README$/.test(file.basename);
-		if (!match && !isReadme) return false;
+		if (!match) return false;
 
 		const content = await this.app.vault.read(file);
 		if (!content.startsWith("---\n")) return false;
@@ -147,47 +200,63 @@ export class FrontmatterNormalizer {
 		const fmText = content.slice(4, firstClose + 1);
 		const body = content.slice(firstClose + 5);
 
+		const keys = getKeys(this.settings);
 		let entries = parseFrontmatter(fmText);
 		let changed = false;
 
-		// 1. Quote jd-id if unquoted
-		const jdIdEntry = entries.find((e) => e.key === "jd-id");
-		if (jdIdEntry) {
-			const m = jdIdEntry.text.match(/^jd-id:\s*(\S+)$/);
+		// 1. Quote ID if unquoted
+		const idEntry = entries.find((e) => e.key === keys.id);
+		if (this.settings.normalizeQuoteId && idEntry) {
+			const m = idEntry.text.match(/^[a-zA-Z][\w-]*:\s*(\S+)$/);
 			if (m && !m[1].startsWith("'") && !m[1].startsWith('"')) {
-				jdIdEntry.text = `jd-id: '${m[1]}'`;
+				idEntry.text = `${keys.id}: '${m[1]}'`;
 				changed = true;
 			}
 		}
 
-		// 2. Infer jd-type if missing
-		if (!entries.find((e) => e.key === "jd-type") && jdIdEntry) {
-			const idVal = jdIdEntry.text
-				.replace(/^jd-id:\s*/, "")
-				.replace(/['"]/g, "");
-			const type = inferType(idVal);
-			if (type) {
-				entries.push({ key: "jd-type", text: `jd-type: ${type}` });
-				changed = true;
+		// 2. Infer type if missing
+		if (this.settings.normalizeInferType && idEntry) {
+			const valMatch = idEntry.text.match(/^[a-zA-Z][\w-]*:\s*(.*)$/);
+			const idVal = (valMatch ? valMatch[1] : "")
+				.replace(/['"]/g, "")
+				.trim();
+			const inferred = inferType(idVal);
+
+			if (inferred && shouldWriteType(this.settings, inferred)) {
+				if (this.settings.typeAsTag) {
+					const tag = typeTagFor(this.settings, inferred);
+					if (ensureTag(entries, tag)) changed = true;
+				} else if (!entries.find((e) => e.key === keys.type)) {
+					entries.push({
+						key: keys.type,
+						text: `${keys.type}: ${inferred}`,
+					});
+					changed = true;
+				}
 			}
 		}
 
 		// 3. Sort keys
-		const sorted = sortEntries(entries);
-		const keysChanged =
-			sorted.map((e) => e.key).join(",") !==
-			entries.map((e) => e.key).join(",");
-		if (keysChanged) {
-			entries = sorted;
-			changed = true;
+		if (this.settings.normalizeSortKeys) {
+			const order = buildKeyOrder(this.settings);
+			const sorted = sortEntries(entries, order);
+			const keysChanged =
+				sorted.map((e) => e.key).join(",") !==
+				entries.map((e) => e.key).join(",");
+			if (keysChanged) {
+				entries = sorted;
+				changed = true;
+			}
 		}
 
 		// 4. Strip ID from H1 heading
 		let newBody = body;
-		const headingMatch = HEADING_ID_RE.exec(body);
-		if (headingMatch) {
-			newBody = body.replace(HEADING_ID_RE, `# ${headingMatch[1]}`);
-			if (newBody !== body) changed = true;
+		if (this.settings.normalizeStripHeadingId) {
+			const headingMatch = HEADING_ID_RE.exec(body);
+			if (headingMatch) {
+				newBody = body.replace(HEADING_ID_RE, `# ${headingMatch[1]}`);
+				if (newBody !== body) changed = true;
+			}
 		}
 
 		if (!changed) return false;

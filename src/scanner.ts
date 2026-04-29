@@ -8,14 +8,27 @@
 import { type App, TFile, TFolder } from "obsidian";
 import type { JDex, FlatEntry } from "./jdex";
 import { flatEntries } from "./jdex";
+import type { JDKeys } from "./keys";
+import { isIgnored, clearIgnoreCache } from "./ignores";
 
 // ── JD naming patterns ──────────────────────────────────────────
 
 const AREA_RE = /^(\d{2})-(\d{2})\s+(.+)$/;
 const CATEGORY_RE = /^(\d{2})\s+(.+)$/;
 const ID_RE = /^(\d{2}\.\d{2})\s+(.+)$/;
-const README_RE = /^(\d{2}\.\d{2})\+README$/;
 const INBOX_SUFFIXES = ["Unsorted", "Inbox"];
+
+/**
+ * True when `file` is the cover note for an ID directory — i.e. its parent
+ * folder matches `XX.YY Title` and the file's basename equals the folder name.
+ * Cover-note convention: `06.12 Foo/06.12 Foo.md`.
+ */
+function isCoverNote(file: TFile): boolean {
+	const parent = file.parent;
+	if (!parent) return false;
+	if (!ID_RE.test(parent.name)) return false;
+	return file.basename === parent.name;
+}
 
 // ── Inbox scanning ──────────────────────────────────────────────
 
@@ -58,9 +71,14 @@ export function scanInboxes(app: App): InboxItem[] {
 				const title = idMatch[2];
 				if (!INBOX_SUFFIXES.some((s) => title.startsWith(s))) continue;
 
-				// Count non-dot children, excluding +README
+				// Count non-dot children. Exclude the folder's cover note
+				// (basename matches folder name) and any legacy +README leftover.
+				const coverFilename = `${idChild.name}.md`;
 				const count = idChild.children.filter(
-					(c) => !c.name.startsWith(".") && !c.name.includes("+README")
+					(c) =>
+						!c.name.startsWith(".") &&
+						c.name !== coverFilename &&
+						!c.name.includes("+README")
 				).length;
 
 				if (count > 0) {
@@ -86,7 +104,7 @@ export function scanInboxes(app: App): InboxItem[] {
 export interface DriftItem {
 	/** Vault path to the note */
 	path: string;
-	/** The jd-id from frontmatter */
+	/** The ID value from frontmatter */
 	frontmatterId: string;
 	/** The ID parsed from the filename */
 	filenameId: string | null;
@@ -95,7 +113,9 @@ export interface DriftItem {
 	detail: string;
 }
 
-export function scanDrift(app: App): DriftItem[] {
+export function scanDrift(app: App, keys: JDKeys): DriftItem[] {
+	clearIgnoreCache();
+
 	const results: DriftItem[] = [];
 	const files = app.vault.getMarkdownFiles();
 
@@ -105,58 +125,55 @@ export function scanDrift(app: App): DriftItem[] {
 
 		const fm = cache.frontmatter;
 		const filenameMatch = ID_RE.exec(file.basename);
-		const readmeMatch = README_RE.exec(file.basename);
-
-		// +README files use jd-id like "XX.YY+README" — extract base ID
-		const filenameId = filenameMatch
-			? filenameMatch[1]
-			: readmeMatch
-				? readmeMatch[1]
-				: null;
-		const fmId = fm?.["jd-id"] ? String(fm["jd-id"]) : null;
-		// For +README files, the base ID for comparison
-		const fmBaseId = fmId?.replace(/\+README$/, "") ?? null;
+		const filenameId = filenameMatch ? filenameMatch[1] : null;
+		const fmId = fm?.[keys.id] ? String(fm[keys.id]) : null;
 
 		if (!filenameId && !fmId) continue;
 
-		// Skip +README files where the IDs match (XX.YY+README in fm, XX.YY in filename)
-		if (readmeMatch && fmBaseId === filenameId) continue;
-
 		if (filenameId && !fmId) {
-			results.push({
-				path: file.path,
-				frontmatterId: "",
-				filenameId,
-				issue: "missing-frontmatter",
-				detail: `File ${file.basename} has JD ID in name but no jd-id frontmatter`,
-			});
+			if (!isIgnored(app, file, keys, "missing-frontmatter")) {
+				results.push({
+					path: file.path,
+					frontmatterId: "",
+					filenameId,
+					issue: "missing-frontmatter",
+					detail: `File ${file.basename} has JD ID in name but no ${keys.id} frontmatter`,
+				});
+			}
 			continue;
 		}
 
-		if (filenameId && fmBaseId && filenameId !== fmBaseId) {
-			results.push({
-				path: file.path,
-				frontmatterId: fmId!,
-				filenameId,
-				issue: "id-mismatch",
-				detail: `Filename says ${filenameId}, frontmatter says ${fmId}`,
-			});
+		if (filenameId && fmId && filenameId !== fmId) {
+			if (!isIgnored(app, file, keys, "id-mismatch")) {
+				results.push({
+					path: file.path,
+					frontmatterId: fmId,
+					filenameId,
+					issue: "id-mismatch",
+					detail: `Filename says ${filenameId}, frontmatter says ${fmId}`,
+				});
+			}
 			continue;
 		}
 
-		// Check that the note is in the right category folder
-		// For +README files, the category dir is the grandparent (file → ID dir → category)
-		if (fmBaseId && filenameId) {
-			const expectedCatNum = fmBaseId.split(".")[0];
-			const catFolder = readmeMatch
+		// Check that the note is in the right category folder.
+		// Cover notes live one level deeper (cat → ID dir → cover note),
+		// so use the grandparent for the category check.
+		if (fmId && filenameId) {
+			const expectedCatNum = fmId.split(".")[0];
+			const catFolder = isCoverNote(file)
 				? file.parent?.parent
 				: file.parent;
 			if (catFolder) {
 				const catMatch = CATEGORY_RE.exec(catFolder.name);
-				if (catMatch && catMatch[1] !== expectedCatNum) {
+				if (
+					catMatch &&
+					catMatch[1] !== expectedCatNum &&
+					!isIgnored(app, file, keys, "wrong-folder")
+				) {
 					results.push({
 						path: file.path,
-						frontmatterId: fmId!,
+						frontmatterId: fmId,
 						filenameId,
 						issue: "wrong-folder",
 						detail: `Note ${fmId} is in category ${catMatch[1]} but should be in ${expectedCatNum}`,
@@ -181,12 +198,10 @@ export function findMissingStubs(app: App, jdex: JDex): MissingStub[] {
 	const allEntries = flatEntries(jdex);
 	const existingIds = new Set<string>();
 
-	// Collect all JD IDs that have notes (including +README files)
+	// Collect all JD IDs that have notes
 	for (const file of app.vault.getMarkdownFiles()) {
 		const match = ID_RE.exec(file.basename);
 		if (match) existingIds.add(match[1]);
-		const rmMatch = README_RE.exec(file.basename);
-		if (rmMatch) existingIds.add(rmMatch[1]);
 	}
 
 	const missing: MissingStub[] = [];

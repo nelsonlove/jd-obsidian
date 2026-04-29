@@ -8,6 +8,8 @@
 import { type App, Notice, TFile, normalizePath } from "obsidian";
 import { scanDrift, scanInboxes, findMissingStubs, type DriftItem } from "../scanner";
 import type { JDex } from "../jdex";
+import type { JDSettings } from "../settings";
+import { getKeys, formatTypeFrontmatter } from "../keys";
 
 const REPORT_PATH = "00-09 System/00 System management/00.00+REPORT JD drift report.md";
 
@@ -44,8 +46,13 @@ function issueLabel(issue: DriftItem["issue"]): string {
 	}
 }
 
-export async function generateDriftReport(app: App, jdex: JDex | null): Promise<void> {
-	const drift = scanDrift(app);
+export async function generateDriftReport(
+	app: App,
+	jdex: JDex | null,
+	settings: JDSettings
+): Promise<void> {
+	const keys = getKeys(settings);
+	const drift = scanDrift(app, keys);
 	const inboxes = scanInboxes(app);
 	const missingStubs = jdex ? findMissingStubs(app, jdex) : [];
 
@@ -53,7 +60,9 @@ export async function generateDriftReport(app: App, jdex: JDex | null): Promise<
 
 	// Frontmatter
 	lines.push("---");
-	lines.push("jd-type: report");
+	for (const line of formatTypeFrontmatter(settings, "report")) {
+		lines.push(line);
+	}
 	lines.push(`generated: ${formatDate()}`);
 	lines.push("---");
 	lines.push("");

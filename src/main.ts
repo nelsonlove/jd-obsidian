@@ -13,9 +13,13 @@ import { DriftPanelView, VIEW_TYPE_DRIFT } from "./views/drift-panel";
 import { GoToIdModal } from "./commands/go-to-id";
 import { generateDriftReport } from "./commands/drift-report";
 import { generateAuditReport } from "./commands/audit-report";
+import { migrateReadmeFiles } from "./commands/migrate-readme";
+import { renderCategoryJdex } from "./commands/render-jdex";
+import { promoteToFolder } from "./commands/promote-to-folder";
 import { scanDrift } from "./scanner";
 import { parseJDex, type JDex } from "./jdex";
 import { FrontmatterNormalizer } from "./normalizer";
+import { getKeys } from "./keys";
 import { readFileSync } from "fs";
 
 export default class JDDashboardPlugin extends Plugin {
@@ -26,7 +30,7 @@ export default class JDDashboardPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.loadJDex();
-		this.normalizer = new FrontmatterNormalizer(this.app);
+		this.normalizer = new FrontmatterNormalizer(this.app, this.settings);
 
 		// Register views
 		this.registerView(
@@ -74,16 +78,47 @@ export default class JDDashboardPlugin extends Plugin {
 		this.addCommand({
 			id: "drift-report",
 			name: "Generate drift report",
-			callback: () => generateDriftReport(this.app, this.jdex),
+			callback: () => generateDriftReport(this.app, this.jdex, this.settings),
 		});
 
 		this.addCommand({
 			id: "vault-audit",
 			name: "Run vault audit",
 			callback: () =>
-				generateAuditReport(this.app, this.jdex, {
+				generateAuditReport(this.app, this.jdex, this.settings, {
 					staleDays: this.settings.staleDays,
 				}),
+		});
+
+		this.addCommand({
+			id: "migrate-readme",
+			name: "Migrate +README files to folder-named cover notes",
+			callback: () => migrateReadmeFiles(this.app, getKeys(this.settings)),
+		});
+
+		this.addCommand({
+			id: "render-category-jdex",
+			name: "Render category JDex contents",
+			callback: () => {
+				if (!this.jdex) {
+					new Notice("JDex not loaded — check JDex path setting.");
+					return;
+				}
+				renderCategoryJdex(this.app, this.jdex);
+			},
+		});
+
+		this.addCommand({
+			id: "promote-to-folder",
+			name: "Promote note to folder",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file) return false;
+				if (!file.path.endsWith(".md")) return false;
+				if (checking) return true;
+				promoteToFolder(this.app, file);
+				return true;
+			},
 		});
 
 		// Settings tab
@@ -107,7 +142,7 @@ export default class JDDashboardPlugin extends Plugin {
 		if (this.settings.auditOnStartup) {
 			this.app.workspace.onLayoutReady(() => {
 				setTimeout(() => {
-					generateAuditReport(this.app, this.jdex, {
+					generateAuditReport(this.app, this.jdex, this.settings, {
 						staleDays: this.settings.staleDays,
 					});
 				}, 5000); // wait for metadata cache to settle
@@ -139,6 +174,7 @@ export default class JDDashboardPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.normalizer?.updateSettings(this.settings);
 	}
 
 	private loadJDex(): void {
@@ -182,7 +218,7 @@ export default class JDDashboardPlugin extends Plugin {
 	}
 
 	private updateStatusBar(el: HTMLElement): void {
-		const drift = scanDrift(this.app);
+		const drift = scanDrift(this.app, getKeys(this.settings));
 		if (drift.length > 0) {
 			el.setText(`JD: ${drift.length} drifted`);
 			el.title = drift.map((d) => d.detail).join("\n");
@@ -193,7 +229,7 @@ export default class JDDashboardPlugin extends Plugin {
 	}
 
 	private checkDrift(): void {
-		const drift = scanDrift(this.app);
+		const drift = scanDrift(this.app, getKeys(this.settings));
 		if (drift.length === 0) {
 			new Notice("No drift detected — all JD notes are consistent.");
 			return;
