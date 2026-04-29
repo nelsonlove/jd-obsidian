@@ -7,7 +7,7 @@
 
 import { type App, SuggestModal, TFile } from "obsidian";
 
-const ID_RE = /^(\d{2}\.\d{2})\s+(.+)$/;
+const ID_RE = /^(\d{2}\.\d{2}|\d{5})\s+(.+)$/;
 
 interface JDNoteMatch {
 	id: string;

@@ -19,6 +19,8 @@
 import { type App, Notice, TFile, TFolder } from "obsidian";
 import type { JDex } from "../jdex";
 import { findCategory } from "../jdex";
+import type { JDSettings } from "../settings";
+import { getKeys, formatTypeFrontmatter } from "../keys";
 
 const CATEGORY_JDEX_RE = /^(\d{2})\.00 JDex for category \1\.md$/;
 const CATEGORY_FOLDER_RE = /^(\d{2})\s+(.+)$/;
@@ -34,6 +36,7 @@ interface RenderEntry {
 
 interface RenderResult {
 	scanned: number;
+	created: number;
 	updated: number;
 	unchanged: number;
 	skipped: { path: string; reason: string }[];
@@ -42,16 +45,55 @@ interface RenderResult {
 
 export async function renderCategoryJdex(
 	app: App,
-	jdex: JDex
+	jdex: JDex,
+	settings: JDSettings
 ): Promise<RenderResult> {
 	const result: RenderResult = {
 		scanned: 0,
+		created: 0,
 		updated: 0,
 		unchanged: 0,
 		skipped: [],
 		driftedRefs: [],
 	};
 
+	// Pass 1: ensure every JDex-YAML category has a JDex note. Create missing.
+	for (const area of jdex.areas) {
+		for (const cat of area.categories) {
+			const expectedPath = expectedJdexPath(area.id, area.title, cat.id, cat.title);
+			const existing = app.vault.getAbstractFileByPath(expectedPath);
+			if (existing instanceof TFile) continue;
+			if (existing) {
+				result.skipped.push({
+					path: expectedPath,
+					reason: "non-file at expected path",
+				});
+				continue;
+			}
+
+			// Make sure parent folder exists before creating.
+			const parentPath = expectedPath.slice(0, expectedPath.lastIndexOf("/"));
+			try {
+				await app.vault.createFolder(parentPath);
+			} catch {
+				// Folder may already exist
+			}
+
+			const entries = collectEntries(app, jdex, cat.id);
+			const content = buildNewJdexNote(settings, cat.id, cat.title, entries);
+			try {
+				await app.vault.create(expectedPath, content);
+				result.created++;
+			} catch (e) {
+				result.skipped.push({
+					path: expectedPath,
+					reason: `create failed: ${(e as Error).message}`,
+				});
+			}
+		}
+	}
+
+	// Pass 2: refresh contents of every category JDex file in the vault.
 	const targets = findCategoryJdexFiles(app);
 	result.scanned = targets.length;
 
@@ -89,7 +131,7 @@ export async function renderCategoryJdex(
 		result.updated++;
 	}
 
-	const note = `Rendered JDex contents: ${result.updated} updated, ${result.unchanged} unchanged, ${result.skipped.length} skipped`;
+	const note = `JDex notes: ${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged, ${result.skipped.length} skipped`;
 	new Notice(note);
 
 	if (result.driftedRefs.length > 0) {
@@ -101,6 +143,45 @@ export async function renderCategoryJdex(
 	}
 
 	return result;
+}
+
+// ── Path / filename construction ─────────────────────────────────
+
+function expectedJdexPath(
+	areaId: string,
+	areaTitle: string,
+	catId: string,
+	catTitle: string
+): string {
+	return `${areaId} ${areaTitle}/${catId} ${catTitle}/${catId}.00 JDex for category ${catId}.md`;
+}
+
+// ── New-note construction ───────────────────────────────────────
+
+function buildNewJdexNote(
+	settings: JDSettings,
+	catId: string,
+	catTitle: string,
+	entries: RenderEntry[]
+): string {
+	const keys = getKeys(settings);
+	const title = `JDex for category ${catId}`;
+	const lines: string[] = [
+		"---",
+		`${keys.title}: ${title}`,
+		`${keys.id}: '${catId}.00'`,
+		...formatTypeFrontmatter(settings, "index"),
+		"aliases:",
+		`    - ${catTitle}`,
+		`    - ${catId} ${catTitle}`,
+		"---",
+		"",
+		`# ${title}`,
+		"",
+		renderBulletBlock(entries),
+		"",
+	];
+	return lines.join("\n");
 }
 
 // ── Discovery ────────────────────────────────────────────────────

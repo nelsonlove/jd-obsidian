@@ -10,6 +10,7 @@ import { type App, TFile, TFolder } from "obsidian";
 import type { JDex } from "./jdex";
 import { flatEntries } from "./jdex";
 import type { JDKeys } from "./keys";
+import { categoryOf } from "./keys";
 import { isIgnored, clearIgnoreCache } from "./ignores";
 
 // ── Types ────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ export interface ValidationReport {
 
 // ── Patterns ─────────────────────────────────────────────────────
 
-const ID_RE = /^(\d{2}\.\d{2})\s+(.+)$/;
+const ID_RE = /^(\d{2}\.\d{2}|\d{5})\s+(.+)$/;
 const AREA_RE = /^(\d{2})-(\d{2})\s+(.+)$/;
 const CATEGORY_RE = /^(\d{2})\s+(.+)$/;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
@@ -117,7 +118,7 @@ function checkValidCategories(app: App, keys: JDKeys): ValidationIssue[] {
 		if (!fm?.[keys.id]) continue;
 
 		const jdId = String(fm[keys.id]).replace(/\+.*$/, "");
-		const catNum = jdId.split(".")[0];
+		const catNum = categoryOf(jdId);
 		if (catNum && !knownCategories.has(catNum)) {
 			issues.push({
 				check: "valid-category",

@@ -104,7 +104,7 @@ export default class JDDashboardPlugin extends Plugin {
 					new Notice("JDex not loaded — check JDex path setting.");
 					return;
 				}
-				renderCategoryJdex(this.app, this.jdex);
+				renderCategoryJdex(this.app, this.jdex, this.settings);
 			},
 		});
 

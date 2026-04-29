@@ -17,7 +17,7 @@
 
 import { type App, Notice, TFile } from "obsidian";
 
-const ID_RE = /^(\d{2}\.\d{2})\s+(.+)$/;
+const ID_RE = /^(\d{2}\.\d{2}|\d{5})\s+(.+)$/;
 
 export async function promoteToFolder(app: App, file: TFile | null): Promise<void> {
 	if (!file) {

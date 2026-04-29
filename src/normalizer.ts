@@ -60,6 +60,7 @@ export function inferType(jdId: string): string | null {
 	if (jdId.includes("+")) return "meta";
 	const parts = jdId.split(".");
 	if (parts.length === 2) return ZERO_TYPES[parts[1]] ?? "id";
+	if (/^\d{5}$/.test(jdId)) return "id";
 	return null;
 }
 
@@ -163,8 +164,8 @@ function ensureTag(entries: FmEntry[], tag: string): boolean {
 
 // ── Normalizer ──────────────────────────────────────────────────
 
-const ID_RE = /^(\d{2}\.\d{2})\s+(.+)$/;
-const HEADING_ID_RE = /^# \d{2}\.\d{2}\+?\s+(.+)$/m;
+const ID_RE = /^(\d{2}\.\d{2}|\d{5})\s+(.+)$/;
+const HEADING_ID_RE = /^# (?:\d{2}\.\d{2}\+?|\d{5})\s+(.+)$/m;
 
 export class FrontmatterNormalizer {
 	private app: App;

@@ -46,6 +46,20 @@ export function isCheckIgnored(ignores: string[], checkName: string): boolean {
 	return ignores.includes("*") || ignores.includes(checkName);
 }
 
+/**
+ * Extract the category number from any JD ID form.
+ *
+ *   "06.12"        → "06"
+ *   "92001"        → "92"   (5-digit project items)
+ *   "06.12+README" → "06"
+ *   "00-09"        → "00"   (area)
+ */
+export function categoryOf(id: string): string {
+	if (id.includes(".")) return id.split(".")[0];
+	if (id.includes("-")) return id.split("-")[0];
+	return id.slice(0, 2);
+}
+
 /** Tag string for a given type value, honoring per-type override map. */
 export function typeTagFor(settings: JDSettings, typeValue: string): string {
 	const override = settings.typeTagMap?.[typeValue];

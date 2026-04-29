@@ -9,13 +9,14 @@ import { type App, TFile, TFolder } from "obsidian";
 import type { JDex, FlatEntry } from "./jdex";
 import { flatEntries } from "./jdex";
 import type { JDKeys } from "./keys";
+import { categoryOf } from "./keys";
 import { isIgnored, clearIgnoreCache } from "./ignores";
 
 // ── JD naming patterns ──────────────────────────────────────────
 
 const AREA_RE = /^(\d{2})-(\d{2})\s+(.+)$/;
 const CATEGORY_RE = /^(\d{2})\s+(.+)$/;
-const ID_RE = /^(\d{2}\.\d{2})\s+(.+)$/;
+const ID_RE = /^(\d{2}\.\d{2}|\d{5})\s+(.+)$/;
 const INBOX_SUFFIXES = ["Unsorted", "Inbox"];
 
 /**
@@ -160,7 +161,7 @@ export function scanDrift(app: App, keys: JDKeys): DriftItem[] {
 		// Cover notes live one level deeper (cat → ID dir → cover note),
 		// so use the grandparent for the category check.
 		if (fmId && filenameId) {
-			const expectedCatNum = fmId.split(".")[0];
+			const expectedCatNum = categoryOf(fmId);
 			const catFolder = isCoverNote(file)
 				? file.parent?.parent
 				: file.parent;
