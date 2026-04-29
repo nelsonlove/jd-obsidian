@@ -60,7 +60,9 @@ export function inferType(jdId: string): string | null {
 	if (jdId.includes("+")) return "meta";
 	const parts = jdId.split(".");
 	if (parts.length === 2) return ZERO_TYPES[parts[1]] ?? "id";
-	if (/^\d{5}$/.test(jdId)) return "id";
+	// 5-digit expanded-area IDs (e.g. 92001 projects, 27001 people) cover
+	// disparate content kinds across areas — we don't try to infer a type.
+	// User adds tags manually as appropriate.
 	return null;
 }
 
