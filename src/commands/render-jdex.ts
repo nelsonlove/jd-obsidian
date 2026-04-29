@@ -32,6 +32,7 @@ const SENTINEL_END = "<!-- jd:render-end -->";
 interface RenderEntry {
 	id: string;
 	title: string;
+	description?: string;
 }
 
 interface RenderResult {
@@ -208,7 +209,7 @@ function collectEntries(
 		for (const e of cat.entries) {
 			if (seen.has(e.id)) continue;
 			seen.add(e.id);
-			out.push({ id: e.id, title: e.title });
+			out.push({ id: e.id, title: e.title, description: e.description });
 		}
 	}
 
@@ -246,10 +247,26 @@ function findCategoryFolder(app: App, catNum: string): TFolder | null {
 
 // ── Rendering ────────────────────────────────────────────────────
 
+/**
+ * Render the entry list following the johnnydecimal.com index-page pattern:
+ * each entry is a bullet wikilink, optionally followed by a description
+ * paragraph separated by blank lines.
+ *
+ *   - [[01.01 Inbox for category 01]]
+ *
+ *   Capture buffer for category 01 — items get sorted from here.
+ *
+ *   - [[01.06 Knowledge base for category 01]]
+ */
 function renderBulletBlock(entries: RenderEntry[]): string {
 	const lines = [SENTINEL_START];
 	for (const e of entries) {
 		lines.push(`- [[${e.id} ${e.title}]]`);
+		if (e.description && e.description.trim()) {
+			lines.push("");
+			lines.push(e.description.trim());
+			lines.push("");
+		}
 	}
 	lines.push(SENTINEL_END);
 	return lines.join("\n");
