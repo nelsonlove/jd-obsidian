@@ -69,7 +69,10 @@ export function inferType(
 	for (const [suffix, type] of Object.entries(SUBID_TYPES)) {
 		if (jdId.toUpperCase().includes(suffix)) return type;
 	}
-	if (jdId.includes("+")) return "meta";
+	// `+`-suffixed IDs that don't match a SUBID_TYPES entry have no inferred
+	// type — defer to the user. (Previously fell back to "meta", which doesn't
+	// fit the JD scheme.)
+	if (jdId.includes("+")) return null;
 
 	// Expanded-area items cover disparate kinds; defer to user unless opted in.
 	if (isExpandedFormat(jdId) && !options.inferForExpanded) return null;
