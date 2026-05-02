@@ -20,13 +20,16 @@ import { scanDrift } from "./scanner";
 import { parseJDex, parseJDConfig, type JDex, type JDConfig } from "./jdex";
 import { FrontmatterNormalizer } from "./normalizer";
 import { getKeys } from "./keys";
-import { readFileSync } from "fs";
+import { readFileSync, watchFile, unwatchFile } from "fs";
 
 export default class JDDashboardPlugin extends Plugin {
 	settings: JDSettings = DEFAULT_SETTINGS;
 	jdex: JDex | null = null;
 	jdConfig: JDConfig | null = null;
 	private normalizer!: FrontmatterNormalizer;
+	private watchedJdexPath: string | null = null;
+	private watchedConfigPath: string | null = null;
+	private reloadDebouncer: ReturnType<typeof setTimeout> | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -112,6 +115,12 @@ export default class JDDashboardPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "reload-jdex",
+			name: "Reload JDex and config from disk",
+			callback: () => this.reloadJDexAndConfig("manual"),
+		});
+
+		this.addCommand({
 			id: "promote-to-folder",
 			name: "Promote note to folder",
 			checkCallback: (checking) => {
@@ -166,6 +175,18 @@ export default class JDDashboardPlugin extends Plugin {
 
 	async onunload(): Promise<void> {
 		// Views are automatically deregistered
+		if (this.watchedJdexPath) {
+			unwatchFile(this.watchedJdexPath);
+			this.watchedJdexPath = null;
+		}
+		if (this.watchedConfigPath) {
+			unwatchFile(this.watchedConfigPath);
+			this.watchedConfigPath = null;
+		}
+		if (this.reloadDebouncer) {
+			clearTimeout(this.reloadDebouncer);
+			this.reloadDebouncer = null;
+		}
 	}
 
 	async loadSettings(): Promise<void> {
@@ -181,11 +202,16 @@ export default class JDDashboardPlugin extends Plugin {
 		this.normalizer?.updateSettings(this.settings);
 	}
 
+	private resolvePath(p: string): string {
+		return p.replace("~", process.env.HOME ?? "");
+	}
+
 	private loadJDex(): void {
 		try {
-			const jdexPath = this.settings.jdexPath.replace("~", process.env.HOME ?? "");
+			const jdexPath = this.resolvePath(this.settings.jdexPath);
 			const raw = readFileSync(jdexPath, "utf-8");
 			this.jdex = parseJDex(raw);
+			this.watchPath("jdex", jdexPath);
 		} catch {
 			this.jdex = null;
 		}
@@ -193,11 +219,46 @@ export default class JDDashboardPlugin extends Plugin {
 
 	private loadJDConfig(): void {
 		try {
-			const path = this.settings.jdConfigPath.replace("~", process.env.HOME ?? "");
+			const path = this.resolvePath(this.settings.jdConfigPath);
 			const raw = readFileSync(path, "utf-8");
 			this.jdConfig = parseJDConfig(raw);
+			this.watchPath("config", path);
 		} catch {
 			this.jdConfig = null;
+		}
+	}
+
+	/**
+	 * Watch jdex/config file for external changes (jd-cli writes, manual edits)
+	 * and trigger a debounced reload. The vault event system doesn't see files
+	 * outside the vault, so we use Node's fs.watchFile directly.
+	 */
+	private watchPath(kind: "jdex" | "config", path: string): void {
+		const current = kind === "jdex" ? this.watchedJdexPath : this.watchedConfigPath;
+		if (current === path) return;
+		if (current) unwatchFile(current);
+		watchFile(path, { interval: 1000 }, (curr, prev) => {
+			if (curr.mtimeMs !== prev.mtimeMs) this.scheduleReload();
+		});
+		if (kind === "jdex") this.watchedJdexPath = path;
+		else this.watchedConfigPath = path;
+	}
+
+	private scheduleReload(): void {
+		if (this.reloadDebouncer) clearTimeout(this.reloadDebouncer);
+		this.reloadDebouncer = setTimeout(() => {
+			this.reloadDebouncer = null;
+			this.reloadJDexAndConfig("file changed");
+		}, 250);
+	}
+
+	reloadJDexAndConfig(reason: string): void {
+		this.loadJDex();
+		this.loadJDConfig();
+		new Notice(`JD: reloaded (${reason})`);
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_DRIFT)) {
+			const view = leaf.view as DriftPanelView;
+			if (typeof view.render === "function") view.render();
 		}
 	}
 
